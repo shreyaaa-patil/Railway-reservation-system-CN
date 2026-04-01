@@ -272,10 +272,18 @@ def book_seat(seat):
             confirmed = confirm_with_timeout(seat, 10)
 
             if not confirmed:
-                release(train.get(), seat, CLIENT_ID)
-                refresh()
-                status_var.set("Booking timed out")
+                def do_release():
+                    res = release(train.get(), seat, CLIENT_ID)
+                    print("RELEASE RESPONSE:", res)
+
+                    # force refresh AFTER server updates
+                    root.after(200, refresh)
+
+                    status_var.set("Booking timed out")
+
+                threading.Thread(target=do_release, daemon=True).start()
                 return
+                
 
             status_var.set("Booking...")
             res2 = book(train.get(), seat, CLIENT_ID)
@@ -293,7 +301,7 @@ def book_seat(seat):
 
 def auto_refresh():
     refresh()
-    root.after(1500, auto_refresh)
+    root.after(800, auto_refresh)
 
 auto_refresh()
 root.mainloop()
