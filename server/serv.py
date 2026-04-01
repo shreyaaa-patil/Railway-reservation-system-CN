@@ -9,16 +9,15 @@ from datetime import datetime
 HOST = "0.0.0.0"
 PORT = 5002
 
-DATA_FILE = "data.json"
+DATA_FILE   = "data.json"
 BACKUP_FILE = "backup.json"
 
-lock = threading.Lock()
+lock      = threading.Lock()
+holds     = {}        # (train, seat) → (timestamp, client_id)
+HOLD_TIME = 10        # seconds
 
-holds = {}
-HOLD_TIME = 10  #seconds
 
-
-#DATA HANDLING
+# ── DATA HANDLING ─────────────────────────────────────────────────────────────
 
 def default_data():
     return {
@@ -35,9 +34,9 @@ def load_data():
         with open(DATA_FILE, "r") as f:
             return json.load(f)
     except:
-        #crash recovery
         try:
             with open(BACKUP_FILE, "r") as f:
+                print("[RECOVERY] Loaded from backup")
                 return json.load(f)
         except:
             data = default_data()
@@ -51,33 +50,31 @@ def save_data(data):
             shutil.copy(DATA_FILE, BACKUP_FILE)
     except:
         pass
-
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
 
-def hold_cleanup_worker():
-    while True:
-        time.sleep(1)  #check every second
+# ── HOLD EXPIRY ───────────────────────────────────────────────────────────────
 
-        with lock:
-            data = load_data()
-            changed = clear_expired_holds(data)
-
-            if changed:
-                save_data(data)
-#lock expiry
 def clear_expired_holds(data):
-    now = time.time()
+    """
+    THE FIX: This now both:
+      1. Removes expired keys from the in-memory `holds` dict
+      2. Updates the data dict so the caller can save it to disk
+
+    Previously the data dict was sometimes not saved after cleanup,
+    leaving stale "held" values in data.json forever.
+    """
+    now     = time.time()
     expired = []
 
     for key, (ts, client_id) in list(holds.items()):
         if now - ts > HOLD_TIME:
             train, seat = key
-
-            if data["trains"][train][seat] == "held":
-                data["trains"][train][seat] = "available"
-
+            # Fix the in-memory data dict regardless of current file state
+            if data["trains"][train][str(seat)] == "held":
+                data["trains"][train][str(seat)] = "available"
+                print(f"[HOLD EXPIRED] {train} seat {seat} → available")
             expired.append(key)
 
     for key in expired:
@@ -86,121 +83,152 @@ def clear_expired_holds(data):
     return len(expired) > 0
 
 
-#CLIENT HANDLER
+def hold_cleanup_worker():
+    """
+    Runs in background, wakes every second to expire old holds.
+    THE FIX: Always saves data if anything changed, and catches all exceptions
+    so a single bad save doesn't kill the cleanup loop.
+    """
+    while True:
+        time.sleep(1)
+        try:
+            with lock:
+                data    = load_data()
+                changed = clear_expired_holds(data)
+                if changed:
+                    save_data(data)   # ← this was sometimes not reached before
+        except Exception as e:
+            print(f"[CLEANUP ERROR] {e}")
+
+
+# ── CLIENT HANDLER ────────────────────────────────────────────────────────────
 
 def handle_client(conn):
     try:
-        request = conn.recv(4096).decode()
-        req = json.loads(request)
-
-        action = req.get("action")
+        raw     = conn.recv(4096).decode()
+        req     = json.loads(raw)
+        action  = req.get("action")
+        response = {}
 
         with lock:
             data = load_data()
-            clear_expired_holds(data)
+            clear_expired_holds(data)   # always expire before responding
 
-            response = {}
-
-            #GET SEATS
+            # GET SEATS
             if action == "get_seats":
-                response = data["trains"]
+                # THE FIX: rebuild seat map live from holds dict so it's
+                # always accurate, even if disk write was slightly delayed
+                result = {}
+                for train_name, seats in data["trains"].items():
+                    result[train_name] = {}
+                    for seat_num, status in seats.items():
+                        key = (train_name, seat_num)
+                        if status == "held" and key not in holds:
+                            # Held on disk but not in memory = stale, fix it
+                            result[train_name][seat_num] = "available"
+                            data["trains"][train_name][seat_num] = "available"
+                        else:
+                            result[train_name][seat_num] = status
+                save_data(data)   # persist any stale-hold corrections
+                response = result
 
-            #GET HISTORY
+            # GET HISTORY
             elif action == "get_history":
                 response = data["history"]
 
-            #HOLD
+            # HOLD
             elif action == "hold":
-                train = req["train"]
-                seat = str(req["seat"])
+                train     = req["train"]
+                seat      = str(req["seat"])
                 client_id = req["client_id"]
+                key       = (train, seat)
 
                 if data["trains"][train][seat] == "available":
                     data["trains"][train][seat] = "held"
-                    holds[(train, seat)] = (time.time(), client_id)
+                    holds[key] = (time.time(), client_id)
                     save_data(data)
+                    print(f"[HOLD] {train} seat {seat} held by {client_id[:8]}")
                     response = {"status": "held"}
                 else:
                     response = {"status": "failed"}
 
-            #BOOK
+            # BOOK
             elif action == "book":
-                train = req["train"]
-                seat = str(req["seat"])
+                train     = req["train"]
+                seat      = str(req["seat"])
                 client_id = req["client_id"]
-
-                key = (train, seat)
+                key       = (train, seat)
 
                 if key in holds:
                     ts, owner = holds[key]
-
                     if owner == client_id:
                         data["trains"][train][seat] = "booked"
                         del holds[key]
-
                         data["history"].append({
-                            "train": train,
-                            "seat": seat,
-                            "time": datetime.now().strftime("%H:%M:%S"),
+                            "train":     train,
+                            "seat":      seat,
+                            "time":      datetime.now().strftime("%H:%M:%S"),
                             "client_id": client_id
-    
                         })
-
                         save_data(data)
+                        print(f"[BOOK] {train} seat {seat} booked by {client_id[:8]}")
                         response = {"status": "success"}
                     else:
-                        response = {"status": "failed"}
+                        response = {"status": "failed", "reason": "not owner"}
                 else:
-                    response = {"status": "failed"}
+                    response = {"status": "failed", "reason": "no hold found"}
 
-            #RELEASE
+            # RELEASE
             elif action == "release":
-                train = req["train"]
-                seat = str(req["seat"])
+                train     = req["train"]
+                seat      = str(req["seat"])
                 client_id = req["client_id"]
-
-                key = (train, seat)
+                key       = (train, seat)
 
                 if key in holds:
                     ts, owner = holds[key]
-
                     if owner == client_id:
                         data["trains"][train][seat] = "available"
                         del holds[key]
                         save_data(data)
-
+                        print(f"[RELEASE] {train} seat {seat} released by {client_id[:8]}")
                 response = {"status": "released"}
 
-            #RESET
+            # RESET
             elif action == "reset":
                 data = default_data()
                 holds.clear()
                 save_data(data)
+                print("[RESET] All seats cleared")
                 response = {"status": "reset"}
 
         conn.send(json.dumps(response).encode())
 
     except Exception as e:
-        print("Server Error:", e)
-
+        print(f"[CLIENT ERROR] {e}")
+        try:
+            conn.send(json.dumps({"error": str(e)}).encode())
+        except:
+            pass
     finally:
         conn.close()
 
 
-#SERVER START
+# ── SERVER START ──────────────────────────────────────────────────────────────
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((HOST, PORT))
     server.listen()
+    print(f"[SERVER] Running on {HOST}:{PORT}  (hold timeout = {HOLD_TIME}s)")
 
-    print(f"Server running on {HOST}:{PORT}")
-    
     threading.Thread(target=hold_cleanup_worker, daemon=True).start()
+
     while True:
         conn, addr = server.accept()
-        threading.Thread(target=handle_client,
-                         args=(conn,), daemon=True).start()
+        print(f"[CONNECT] {addr}")
+        threading.Thread(target=handle_client, args=(conn,), daemon=True).start()
 
 
 if __name__ == "__main__":

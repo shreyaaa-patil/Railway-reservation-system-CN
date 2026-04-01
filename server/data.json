@@ -13,14 +13,14 @@
             "10": "booked"
         },
         "TrainB": {
-            "1": "available",
-            "2": "available",
+            "1": "booked",
+            "2": "booked",
             "3": "booked",
             "4": "booked",
-            "5": "held",
+            "5": "available",
             "6": "available",
-            "7": "held",
-            "8": "held",
+            "7": "available",
+            "8": "available",
             "9": "booked",
             "10": "booked"
         }
@@ -109,6 +109,18 @@
             "seat": "9",
             "time": "10:46:45",
             "client_id": "913fdb72-edfb-4197-b7ab-d042dd474fd9"
+        },
+        {
+            "train": "TrainB",
+            "seat": "1",
+            "time": "20:22:45",
+            "client_id": "6efe1d7a-6fde-4cc3-80f4-70274a8b5a14"
+        },
+        {
+            "train": "TrainB",
+            "seat": "2",
+            "time": "20:27:14",
+            "client_id": "26bb4bae-90c3-4e69-93f5-0ab833201c4a"
         }
     ]
 }
