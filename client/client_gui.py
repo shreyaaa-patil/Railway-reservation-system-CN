@@ -135,49 +135,69 @@ tk.Label(status_bar, textvariable=status_var,
          font=FONT_STATUS, bg=SURFACE2, fg=TEXT_DIM).pack(anchor="w", padx=10)
 
 #timeout alert
-def confirm_with_timeout(seat, timeout=10):
-    result = {"val": None}
-
+def confirm_with_timeout(seat, timeout, on_confirm, on_cancel):
+    """
+    Non-blocking confirm dialog.
+    Calls on_confirm() if user clicks Confirm before timeout.
+    Calls on_cancel() if user clicks Cancel OR timer runs out.
+    
+    KEY FIX: The old version used root.wait_window() which BLOCKED the
+    tkinter main thread, so win.after() (the countdown) could never fire.
+    This version uses callbacks instead — it returns immediately and the
+    countdown runs freely on the main thread via win.after().
+    """
     win = tk.Toplevel(root)
     win.title("Confirm Booking")
-    win.geometry("300x150")
+    win.geometry("300x160")
     win.configure(bg=SURFACE)
+    win.resizable(False, False)
+    win.protocol("WM_DELETE_WINDOW", lambda: _do_cancel())
+
+    decided = {"done": False}
 
     tk.Label(win, text=f"Book Seat {seat}?",
-             bg=SURFACE, fg=TEXT).pack(pady=10)
+             font=FONT_BTN, bg=SURFACE, fg=TEXT).pack(pady=(16, 4))
 
     timer_label = tk.Label(win, text=f"Time left: {timeout}s",
-                           bg=SURFACE, fg=YELLOW)
-    timer_label.pack()
+                           font=FONT_SUB, bg=SURFACE, fg=YELLOW)
+    timer_label.pack(pady=(0, 8))
 
-    def confirm():
-        result["val"] = True
+    def _do_confirm():
+        if decided["done"]:
+            return
+        decided["done"] = True
         win.destroy()
+        on_confirm()
 
-    def cancel():
-        result["val"] = False
+    def _do_cancel():
+        if decided["done"]:
+            return
+        decided["done"] = True
         win.destroy()
+        on_cancel()
 
-    tk.Button(win, text="Confirm", command=confirm,
-              bg=GREEN, fg="white").pack(side="left", padx=20, pady=20)
+    btn_frame = tk.Frame(win, bg=SURFACE)
+    btn_frame.pack()
 
-    tk.Button(win, text="Cancel", command=cancel,
-              bg=RED, fg="white").pack(side="right", padx=20, pady=20)
+    tk.Button(btn_frame, text="Confirm", command=_do_confirm,
+              font=FONT_SUB, bg=GREEN, fg="white",
+              relief="flat", padx=16, pady=6).pack(side="left", padx=16)
+
+    tk.Button(btn_frame, text="Cancel", command=_do_cancel,
+              font=FONT_SUB, bg=RED, fg="white",
+              relief="flat", padx=16, pady=6).pack(side="right", padx=16)
 
     def countdown(t):
-        if result["val"] is not None:
-            return
+        if decided["done"]:
+            return                         # user already acted, stop ticking
         if t <= 0:
-            result["val"] = False
-            win.destroy()
+            _do_cancel()                   # time's up → auto-cancel
             return
         timer_label.config(text=f"Time left: {t}s")
-        win.after(1000, countdown, t-1)
+        win.after(1000, countdown, t - 1)  # next tick, runs on main thread ✅
 
     countdown(timeout)
-    root.wait_window(win)
-
-    return result["val"]
+    # NOTE: No root.wait_window() here — that was the bug!
 
 #some more history stuff
 def update_history():
@@ -256,46 +276,47 @@ def refresh():
     update_history()
 
 def book_seat(seat):
-    status_var.set(f"Requesting lock for seat {seat}")
+    status_var.set(f"Requesting lock for seat {seat}...")
 
     def task():
         res = hold(train.get(), seat, CLIENT_ID)
 
         if res.get("status") != "held":
-            root.after(0, lambda:
-                status_var.set("Seat is already taken"))
+            root.after(0, lambda: status_var.set("Seat is already taken"))
+            root.after(0, refresh)
             return
 
-        def confirm():
-            status_var.set("Seat reserved, please click confirm to complete the booking")
+        # Hold acquired — now show the confirm dialog (on main thread)
+        def show_dialog():
+            status_var.set("Seat held! Confirm within 10 seconds...")
 
-            confirmed = confirm_with_timeout(seat, 10)
+            def on_confirm():
+                status_var.set("Booking...")
 
-            if not confirmed:
+                def do_book():
+                    res2 = book(train.get(), seat, CLIENT_ID)
+                    if res2.get("status") == "success":
+                        root.after(0, lambda: status_var.set(f"✅ Seat {seat} booked!"))
+                    else:
+                        root.after(0, lambda: status_var.set("Booking failed"))
+                    root.after(0, refresh)
+
+                threading.Thread(target=do_book, daemon=True).start()
+
+            def on_cancel():
+                # This fires whether user clicked Cancel OR the 10s expired
+                status_var.set("Releasing hold...")
+
                 def do_release():
-                    res = release(train.get(), seat, CLIENT_ID)
-                    print("RELEASE RESPONSE:", res)
-
-                    # force refresh AFTER server updates
-                    root.after(200, refresh)
-
-                    status_var.set("Booking timed out")
+                    release(train.get(), seat, CLIENT_ID)
+                    root.after(0, lambda: status_var.set("Booking cancelled / timed out"))
+                    root.after(0, refresh)
 
                 threading.Thread(target=do_release, daemon=True).start()
-                return
-                
 
-            status_var.set("Booking...")
-            res2 = book(train.get(), seat, CLIENT_ID)
+            confirm_with_timeout(seat, 10, on_confirm, on_cancel)
 
-            if res2.get("status") == "success":
-                status_var.set(f"Seat {seat} booked")
-            else:
-                status_var.set("Booking failed")
-
-            refresh()
-
-        root.after(0, confirm)
+        root.after(0, show_dialog)
 
     threading.Thread(target=task, daemon=True).start()
 
