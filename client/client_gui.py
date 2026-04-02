@@ -304,7 +304,7 @@ def book_seat(seat):
                 threading.Thread(target=do_book, daemon=True).start()
 
             def on_cancel():
-                # This fires whether user clicked Cancel OR the 10s expired
+            
                 status_var.set("Releasing hold...")
 
                 def do_release():

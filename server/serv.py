@@ -17,7 +17,7 @@ holds     = {}        # (train, seat) → (timestamp, client_id)
 HOLD_TIME = 10        # seconds
 
 
-# ── DATA HANDLING ─────────────────────────────────────────────────────────────
+#data handling
 
 def default_data():
     return {
@@ -54,24 +54,15 @@ def save_data(data):
         json.dump(data, f, indent=4)
 
 
-# ── HOLD EXPIRY ───────────────────────────────────────────────────────────────
+#hold expiry
 
 def clear_expired_holds(data):
-    """
-    THE FIX: This now both:
-      1. Removes expired keys from the in-memory `holds` dict
-      2. Updates the data dict so the caller can save it to disk
-
-    Previously the data dict was sometimes not saved after cleanup,
-    leaving stale "held" values in data.json forever.
-    """
     now     = time.time()
     expired = []
 
     for key, (ts, client_id) in list(holds.items()):
         if now - ts > HOLD_TIME:
             train, seat = key
-            # Fix the in-memory data dict regardless of current file state
             if data["trains"][train][str(seat)] == "held":
                 data["trains"][train][str(seat)] = "available"
                 print(f"[HOLD EXPIRED] {train} seat {seat} → available")
@@ -84,11 +75,6 @@ def clear_expired_holds(data):
 
 
 def hold_cleanup_worker():
-    """
-    Runs in background, wakes every second to expire old holds.
-    THE FIX: Always saves data if anything changed, and catches all exceptions
-    so a single bad save doesn't kill the cleanup loop.
-    """
     while True:
         time.sleep(1)
         try:
@@ -96,12 +82,12 @@ def hold_cleanup_worker():
                 data    = load_data()
                 changed = clear_expired_holds(data)
                 if changed:
-                    save_data(data)   # ← this was sometimes not reached before
+                    save_data(data)
         except Exception as e:
             print(f"[CLEANUP ERROR] {e}")
 
 
-# ── CLIENT HANDLER ────────────────────────────────────────────────────────────
+#client handler
 
 def handle_client(conn):
     try:
@@ -112,12 +98,8 @@ def handle_client(conn):
 
         with lock:
             data = load_data()
-            clear_expired_holds(data)   # always expire before responding
-
-            # GET SEATS
+            clear_expired_holds(data) 
             if action == "get_seats":
-                # THE FIX: rebuild seat map live from holds dict so it's
-                # always accurate, even if disk write was slightly delayed
                 result = {}
                 for train_name, seats in data["trains"].items():
                     result[train_name] = {}
@@ -132,11 +114,11 @@ def handle_client(conn):
                 save_data(data)   # persist any stale-hold corrections
                 response = result
 
-            # GET HISTORY
+            #GET HISTORY
             elif action == "get_history":
                 response = data["history"]
 
-            # HOLD
+            #HOLD
             elif action == "hold":
                 train     = req["train"]
                 seat      = str(req["seat"])
@@ -152,7 +134,7 @@ def handle_client(conn):
                 else:
                     response = {"status": "failed"}
 
-            # BOOK
+            #BOOK
             elif action == "book":
                 train     = req["train"]
                 seat      = str(req["seat"])
@@ -178,7 +160,7 @@ def handle_client(conn):
                 else:
                     response = {"status": "failed", "reason": "no hold found"}
 
-            # RELEASE
+            #RELEASE
             elif action == "release":
                 train     = req["train"]
                 seat      = str(req["seat"])
@@ -194,7 +176,7 @@ def handle_client(conn):
                         print(f"[RELEASE] {train} seat {seat} released by {client_id[:8]}")
                 response = {"status": "released"}
 
-            # RESET
+            #RESET
             elif action == "reset":
                 data = default_data()
                 holds.clear()
@@ -214,7 +196,7 @@ def handle_client(conn):
         conn.close()
 
 
-# ── SERVER START ──────────────────────────────────────────────────────────────
+#server start
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
