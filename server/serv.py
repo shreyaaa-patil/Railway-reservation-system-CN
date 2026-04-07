@@ -13,8 +13,8 @@ DATA_FILE   = "data.json"
 BACKUP_FILE = "backup.json"
 
 lock      = threading.Lock()
-holds     = {}        # (train, seat) → (timestamp, client_id)
-HOLD_TIME = 10        # seconds
+holds     = {}       
+HOLD_TIME = 10        #seconds
 
 
 #data handling
@@ -106,12 +106,12 @@ def handle_client(conn):
                     for seat_num, status in seats.items():
                         key = (train_name, seat_num)
                         if status == "held" and key not in holds:
-                            # Held on disk but not in memory = stale, fix it
+                            #Held on disk but not in memory---stale, fix it
                             result[train_name][seat_num] = "available"
                             data["trains"][train_name][seat_num] = "available"
                         else:
                             result[train_name][seat_num] = status
-                save_data(data)   # persist any stale-hold corrections
+                save_data(data)   #persist any stale-hold corrections
                 response = result
 
             #GET HISTORY
