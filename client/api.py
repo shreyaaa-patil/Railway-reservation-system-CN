@@ -2,7 +2,7 @@ import socket
 import json
 
 
-SERVER_IP = "10.1.2.135"   #put server ip everytime you use pesu wifi
+SERVER_IP = ""   #put server ip everytime you use pesu wifi
 PORT = 5002
 
 
