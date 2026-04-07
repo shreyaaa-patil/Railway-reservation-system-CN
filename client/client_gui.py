@@ -136,16 +136,6 @@ tk.Label(status_bar, textvariable=status_var,
 
 #timeout alert
 def confirm_with_timeout(seat, timeout, on_confirm, on_cancel):
-    """
-    Non-blocking confirm dialog.
-    Calls on_confirm() if user clicks Confirm before timeout.
-    Calls on_cancel() if user clicks Cancel OR timer runs out.
-    
-    KEY FIX: The old version used root.wait_window() which BLOCKED the
-    tkinter main thread, so win.after() (the countdown) could never fire.
-    This version uses callbacks instead — it returns immediately and the
-    countdown runs freely on the main thread via win.after().
-    """
     win = tk.Toplevel(root)
     win.title("Confirm Booking")
     win.geometry("300x160")
@@ -189,15 +179,14 @@ def confirm_with_timeout(seat, timeout, on_confirm, on_cancel):
 
     def countdown(t):
         if decided["done"]:
-            return                         # user already acted, stop ticking
+            return                         #user already acted,stop ticking
         if t <= 0:
-            _do_cancel()                   # time's up → auto-cancel
+            _do_cancel()                   #time's up then auto-cancel
             return
         timer_label.config(text=f"Time left: {t}s")
-        win.after(1000, countdown, t - 1)  # next tick, runs on main thread ✅
+        win.after(1000, countdown, t - 1)  #next tick, runs on main thread
 
     countdown(timeout)
-    # NOTE: No root.wait_window() here — that was the bug!
 
 #some more history stuff
 def update_history():
@@ -214,29 +203,6 @@ def update_history():
                 values=(entry["time"], entry["train"],
                     f"Seat {entry['seat']}"))
         
-"""def refresh():
-    data = get_seats()
-
-    if "error" in data:
-        status_var.set("Server DOWN — booking disabled")
-        for b in buttons.values():
-            b.config(state="disabled")
-        return
-
-    current = train.get()
-
-    for i in range(1, 11):
-        status = data[current][str(i)]
-        btn = buttons[i]
-
-        if status == "available":
-            btn.config(bg=GREEN_DIM, fg=GREEN, state="normal")
-        elif status == "held":
-            btn.config(bg=YELLOW_DIM, fg=YELLOW, state="disabled")
-        else:
-            btn.config(bg=RED_DIM, fg=RED, state="disabled")
-
-    update_history()"""
 
 def refresh():
     global server_down
@@ -286,7 +252,7 @@ def book_seat(seat):
             root.after(0, refresh)
             return
 
-        # Hold acquired — now show the confirm dialog (on main thread)
+        #Hold acquired
         def show_dialog():
             status_var.set("Seat held! Confirm within 10 seconds...")
 
@@ -296,7 +262,7 @@ def book_seat(seat):
                 def do_book():
                     res2 = book(train.get(), seat, CLIENT_ID)
                     if res2.get("status") == "success":
-                        root.after(0, lambda: status_var.set(f"✅ Seat {seat} booked!"))
+                        root.after(0, lambda: status_var.set(f"Seat {seat} booked!"))
                     else:
                         root.after(0, lambda: status_var.set("Booking failed"))
                     root.after(0, refresh)
